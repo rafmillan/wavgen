@@ -2,11 +2,19 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
+#include <ctype.h>
 
 #define WAV_HEADER_LEN 44
+
+#define C4_FREQ 256 
+
+#define DEFAULT_DURATION 5
+#define DEFAULT_AMPLITUDE 1000
+#define DEFAULT_SAMPLE_RATE 8000
+
 #define SAMPLE_RATE_CD 44100
 #define SAMPLE_RATE_DAT 48000
-#define C4_FREQ 256 
 
 // Source: https://docs.fileformat.com/audio/wav/
 struct WavHeader {
@@ -60,10 +68,83 @@ int generateFile(char *name, const void *buff, int buffSize, struct WavHeader *h
     fclose(fp);
 }
 
+int isNumber(char *str) {
+    if (str == NULL) return 0;
+
+    int decimal_count = 0;
+    int i = 0;
+
+    while (str[i] != '\0') {
+        if (!isdigit(str[i])) {
+            if (str[i] == '.' && decimal_count == 0) {
+                decimal_count++;
+            } else {
+                return 0;
+            }
+        }
+        i++;
+    }
+
+    return 1;
+}
+
+void parseArgs(int argc, char **argv, float *f, int *d, int *r) {
+    int opt;
+    while ((opt = getopt(argc, argv, "f:t:r:")) != -1) {
+        switch (opt) {
+            case 'f':
+                if(!isNumber(optarg)) {
+                    fprintf (stderr, "Option -%c requires an a number (frequency in Hz).\n", opt);
+                    exit(1);
+                }
+                *f = atof(optarg);
+                break;
+            case 't':
+                if(!isNumber(optarg)) {
+                    fprintf (stderr, "Option -%c requires an a number (duration time in seconds).\n", opt);
+                    exit(1);
+                }
+                *d = atoi(optarg);
+                break;
+            case 'r':
+                if(!isNumber(optarg)) {
+                    fprintf (stderr, "Option -%c requires an a number (sample rate).\n", opt);
+                    exit(1);
+                } else if (atoi(optarg) < 3000) {
+                    fprintf (stderr, "Option -%c requires a sample rate >= 3000.\n", opt);
+                    exit(1);
+                } else if (atoi(optarg) > 768000) {
+                    fprintf (stderr, "Option -%c requires a sample rate <= 768000.\n", opt);
+                    exit(1);
+                }
+                *r = atoi(optarg);
+                break;
+            case '?':
+                if (optopt == 'f')
+                    fprintf (stderr, "Option -%c requires an argument [tone frequency (Hz)].\n", optopt);
+                else if (isprint(optopt))
+                    fprintf (stderr, "Unknown option `-%c'.\n", optopt);
+                else
+                    fprintf (stderr, "Unknown option character `\\x%x'.\n", optopt);
+                exit(1);
+            default:
+                fprintf(stderr, "Usage: %s\n", argv[0]);
+                exit(1);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
+    int opt;
+    float freq = (float)C4_FREQ;
+    int _duration = DEFAULT_DURATION;
+    int _sample = DEFAULT_SAMPLE_RATE;
+
+    parseArgs(argc, argv, &freq, &_duration,&_sample);
+
     const int headerSize = sizeof(struct WavHeader);
-    const int sampleRate = 8000;
-    const int duration = 10;
+    const int sampleRate = _sample;
+    const int duration = _duration;
     const int buffsize = duration * sampleRate;
     short int buff[buffsize];
     memset(buff, 0, sizeof(buffsize));
@@ -73,10 +154,11 @@ int main(int argc, char** argv) {
     generateHeader(&wavHeader, 1, sampleRate, buffsize);
 
     // Generate tone signal
-    short int amplitude = 1000;
-    generateWave(buff, C4_FREQ, amplitude, sampleRate, buffsize);
+    short int amplitude = DEFAULT_AMPLITUDE;
+    generateWave(buff, freq, amplitude, sampleRate, buffsize);
 
     // Create .wav file
+    printf("Generating .wav file [Freq: %.2fHz, Duration: %ds, Sample Rate: %d]\n", freq, duration, sampleRate);
     generateFile("result.wav", &buff, buffsize, &wavHeader, headerSize);
 
     return 0;
