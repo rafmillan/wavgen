@@ -4,11 +4,13 @@
 #include <math.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <sys/stat.h>
 #include "hash.h"
 #include "notes.h"
 
 #define WAV_HEADER_LEN 44
 
+#define DEFAULT_INPUT_NAME "s_input.txt"
 #define DEFAULT_FILE_NAME "result.wav"
 #define MAX_FILE_NAME_SIZE 10
 
@@ -22,6 +24,9 @@
 #define SAMPLE_RATE_MIN 3000
 
 #define AMPLITUDE_MAX 32767
+
+#define MAX_BEAT_COUNT 8
+
 
 // Source: https://docs.fileformat.com/audio/wav/
 struct WavHeader {
@@ -61,7 +66,24 @@ int generateHeader(struct WavHeader *header, int numCh, int sampleRate, int buff
     return 0;
 }
 
-int generateWave(short int *buff, int freq, int amp, int sampleRate, int buffsize) {
+int generateWaveFromInput(short int *buff, int buffsize, char **beats, int numBeats, int sampleRate) {
+    int buffIdxPerBeat = buffsize / numBeats;
+    printf("buffer slices per beat: %d (%d/%d)\n", buffIdxPerBeat, buffsize, numBeats);
+    
+    int amp = DEFAULT_AMPLITUDE;
+    int buffIdx = 0;
+    for (int noteIdx = 0; noteIdx < numBeats; noteIdx++) {
+        float freq = get(beats[noteIdx]);
+        float period = (2 * M_PI * freq) / sampleRate;
+        printf("writing %s (%f)...\n", beats[noteIdx], freq);
+        for (int i = 0; i < buffIdxPerBeat; i++) {
+            buff[buffIdx] = (short int)(amp * cos(period * buffIdx));
+            buffIdx++;
+        }
+    }
+}
+
+int generateWave(short int *buff, float freq, int amp, int sampleRate, int buffsize) {
     float period = (2 * M_PI * freq) / sampleRate;
     for (int i = 0; i < buffsize; i++) {
         buff[i] = (short int)(amp * cos(period * i));
@@ -95,11 +117,11 @@ int isNumber(char *str) {
     return 1;
 }
 
-void parseArgs(int argc, char **argv, float *f, char *n, int *d, int *r, short int *v, char *filename) {
+void parseArgs(int argc, char **argv, float *f, char *n, int *d, int *r, short int *v, char *filename, char *input, int *flag_i) {
     int opt;
     int flag_f = 0;
     int flag_n = 0;
-    while ((opt = getopt(argc, argv, "f:n:t:r:v:o:h")) != -1) {
+    while ((opt = getopt(argc, argv, "f:n:t:r:v:o:i:h")) != -1) {
         switch (opt) {
             case 'f':
                 if(!isNumber(optarg)) {
@@ -157,6 +179,14 @@ void parseArgs(int argc, char **argv, float *f, char *n, int *d, int *r, short i
                 strcpy(filename, optarg);
                 strcat(filename, ".wav");
                 break;
+            case 'i':
+                if (strlen(optarg) > MAX_FILE_NAME_SIZE || optarg == NULL) {
+                    fprintf(stderr, "Error: Invalid file name (max 10 characters)\n");
+                    exit(EXIT_FAILURE);
+                }
+                strcpy(input, optarg);
+                *flag_i = 1;
+                break;
             case 'h':
                 printf("Usage: ./wav_gen [-f <freq> | -n <note>] [-t <time>] [-r <rate>] [-v <volume>]  [-o <output file name>]\n");
                 printf("Use -f to specify frequency in Hz OR -n to select a note, eg: C4.\n");
@@ -192,10 +222,18 @@ void initHash() {
         install(keys[i], vals[i]);
 }
 
+int fileExists(char *filename)
+{
+    struct stat buffer;   
+    return (stat(filename, &buffer) == 0);
+}
+
 int main(int argc, char** argv) {
     int opt;
     float freq = (float)C4;
     char note[4];
+    int input_flag = 0;
+    char input[15] = DEFAULT_INPUT_NAME;
     char filename[15] = DEFAULT_FILE_NAME;
     int _duration = DEFAULT_DURATION;
     int _sample = DEFAULT_SAMPLE_RATE;
@@ -204,26 +242,149 @@ int main(int argc, char** argv) {
     // Initialize Hash Table with Notes
     initHash();
 
-    parseArgs(argc, argv, &freq, note, &_duration, &_sample, &_amplitude, filename);
+    parseArgs(argc, argv, &freq, note, &_duration, &_sample, &_amplitude, filename, input, &input_flag);
 
-    const int headerSize = sizeof(struct WavHeader);
-    const int sampleRate = _sample;
-    const int duration = _duration;
-    const int buffsize = duration * sampleRate;
-    short int buff[buffsize];
-    memset(buff, 0, sizeof(buffsize));
+    if (input_flag) {
+        printf("Reading from file: %s\n", input);
+        if (!fileExists(input)) {
+            fprintf(stderr, "File does not exists!\n");
+            exit(EXIT_FAILURE);
+        }
 
-    // Create .wav header
-    struct WavHeader wavHeader;
-    generateHeader(&wavHeader, 1, sampleRate, buffsize);
+        FILE *inputfp;
+        inputfp = fopen(input, "r");
+        if (inputfp == NULL) {
+            fprintf(stderr, "Error opening file!\n");
+            exit(EXIT_FAILURE);
+        }
 
-    // Generate tone signal
-    generateWave(buff, freq, _amplitude, sampleRate, buffsize);
+        int lineNum = 1;
+        int numMeasures, beatsPerMeasure, msPerBeat;
+        char beginKey[] = "begin";
+        char beginFlag[6];
+        //char endKey[] = "end";
+        //char endFlag[4];
 
-    // Create .wav file
-    printf("Generating %s...\n[Freq: %.2fHz, Duration: %ds, Sample Rate: %d, Volume: %d]\n", filename, freq, duration, sampleRate, _amplitude);
-    generateFile(filename, &buff, buffsize, &wavHeader, headerSize);
-    
+        // Read numMeasures
+        if (fscanf(inputfp, "%d", &numMeasures) != 1) {
+            fprintf(stderr, "Error reading measure to play!\n");
+            exit(EXIT_FAILURE);
+        }
+        lineNum++;
+
+        // Read bpm
+        if  (fscanf(inputfp, "%d", &beatsPerMeasure) != 1) {
+            fprintf(stderr, "Error reading beats per measure!\n");
+            exit(EXIT_FAILURE);
+        }
+        lineNum++;
+
+        // Read msPerBeat
+        if (fscanf(inputfp, "%d", &msPerBeat) != 1) {
+            fprintf(stderr, "Error reading ms per beat!\n");
+            exit(EXIT_FAILURE);
+        }
+        lineNum++;
+
+        // Read begin token
+        if (fscanf(inputfp, "%s", beginFlag) != 1) {
+            fprintf(stderr, "Error reading begin token!\n");
+            exit(EXIT_FAILURE);
+        } else if(strcmp(beginFlag, beginKey)) {
+            printf("Error (%d): Expected %s, actual %s\n", lineNum, beginKey, beginFlag);
+            exit(EXIT_FAILURE);
+        }
+        lineNum++;
+
+        const int headerSize = sizeof(struct WavHeader);
+        const int sampleRate = _sample;
+        const int duration = (msPerBeat * beatsPerMeasure * numMeasures) / 1000;
+        const int buffsize = duration * sampleRate;
+        int totalBeats = numMeasures * beatsPerMeasure;
+        short int buff[buffsize];
+        memset(buff, 0, sizeof(buffsize));
+
+        printf("measures to play: %d\n", numMeasures);
+        printf("beats per measure: %d\n", beatsPerMeasure);
+        printf("ms per beat: %d\n", msPerBeat);
+        printf("total beats: %d\n", totalBeats);
+        printf("total duration: %ds\n\n", duration);
+
+        char **beats = (char **) malloc(totalBeats * sizeof(char *));
+        int beatIndex = 0;
+        int beatCount;
+
+        char _note[4];
+        char _beatCountStr[MAX_BEAT_COUNT];
+        
+        // Read Notes
+        while (fscanf(inputfp, "%s %s", _note, _beatCountStr) == 2) {
+            if (get(_note) < 0) {
+                fprintf(stderr, "Error (%d): Invalid Note (%s)!\n", lineNum, _note);
+                exit(EXIT_FAILURE);
+            }
+            beatCount = atoi(_beatCountStr);
+            printf("Play %s for %d beat(s)\n", _note, beatCount);
+            for (int i = 0; i < beatCount; i++) {
+                beats[beatIndex] = (char *) malloc(strlen(_note) + 1);
+                strcpy(beats[beatIndex], _note);
+                beatIndex++;
+            }
+            lineNum++;
+        }
+
+        // Read end token
+        //if (fscanf(inputfp, "%s", endFlag) != 1) {
+        //    fprintf(stderr, "Error reading end token [%s]!\n", );
+        //    exit(EXIT_FAILURE);
+        //} else if(strcmp(endFlag, endKey)) {
+        //    printf("Error (%d): Expected %s, actual %s\n", lineNum, endKey, endFlag);
+        //    exit(EXIT_FAILURE);
+        //}
+        //lineNum++;
+
+        fclose(inputfp);  
+
+        printf("\nRead Input (%d): ", totalBeats);
+        for (int i = 0; i < totalBeats; i++) {
+            printf("%s ", beats[i]);
+        }
+        printf("\n\n");
+
+        // Create .wav
+        struct WavHeader wavHeader;
+        generateHeader(&wavHeader, 1, sampleRate, buffsize);
+        generateWaveFromInput(buff, buffsize, beats, totalBeats, sampleRate);
+        generateFile(filename, &buff, buffsize, &wavHeader, headerSize);
+        printf("\nDone!\n");
+
+
+        // Cleanup Beats
+        for (int i = 0; i < totalBeats; i++) {
+            free(beats[i]);
+        }
+        free(beats);
+
+    } else {
+        const int headerSize = sizeof(struct WavHeader);
+        const int sampleRate = _sample;
+        const int duration = _duration;
+        const int buffsize = duration * sampleRate;
+        short int buff[buffsize];
+        memset(buff, 0, sizeof(buffsize));
+
+        // Create .wav header
+        struct WavHeader wavHeader;
+        generateHeader(&wavHeader, 1, sampleRate, buffsize);
+
+        // Generate tone signal
+        generateWave(buff, freq, _amplitude, sampleRate, buffsize);
+
+        // Create .wav file
+        printf("Generating %s...\n[Freq: %.2fHz, Duration: %ds, Sample Rate: %d, Volume: %d]\n", filename, freq, duration, sampleRate, _amplitude);
+        generateFile(filename, &buff, buffsize, &wavHeader, headerSize);
+    }
+
     cleanup();
 
     return 0;
