@@ -9,7 +9,8 @@
 
 #define WAV_HEADER_LEN 44
 
-#define C4_FREQ 256 
+#define DEFAULT_FILE_NAME "result.wav"
+#define MAX_FILE_NAME_SIZE 10
 
 #define DEFAULT_DURATION 5
 #define DEFAULT_AMPLITUDE 1000
@@ -94,11 +95,11 @@ int isNumber(char *str) {
     return 1;
 }
 
-void parseArgs(int argc, char **argv, float *f, char *n, int *d, int *r, short int *v) {
+void parseArgs(int argc, char **argv, float *f, char *n, int *d, int *r, short int *v, char *filename) {
     int opt;
     int flag_f = 0;
     int flag_n = 0;
-    while ((opt = getopt(argc, argv, "f:n:t:r:v:")) != -1) {
+    while ((opt = getopt(argc, argv, "f:n:t:r:v:o:h")) != -1) {
         switch (opt) {
             case 'f':
                 if(!isNumber(optarg)) {
@@ -148,11 +149,28 @@ void parseArgs(int argc, char **argv, float *f, char *n, int *d, int *r, short i
                 }
                 *v = atoi(optarg);
                 break;
+            case 'o':
+                if (strlen(optarg) > MAX_FILE_NAME_SIZE || optarg == NULL) {
+                    fprintf(stderr, "Error: Invalid file name (max 10 characters)\n");
+                    exit(EXIT_FAILURE);
+                }
+                strcpy(filename, optarg);
+                strcat(filename, ".wav");
+                break;
+            case 'h':
+                printf("Usage: ./wav_gen [-f <freq> | -n <note>] [-t <time>] [-r <rate>] [-v <volume>]  [-o <output file name>]\n");
+                printf("Use -f to specify frequency in Hz OR -n to select a note, eg: C4.\n");
+                printf("Use -t to specify duration in seconds.\n");
+                printf("Use -r to specify a sample rate.\n");
+                printf("Use -v to specify a volume level.\n");
+                printf("Use -o to specify a custom output file name (max 10 characters).\n");
+                exit(EXIT_SUCCESS);
+                break;
             case '?':
                 if (optopt == 'f')
                     fprintf (stderr, "Option -%c requires an argument [tone frequency (Hz)].\n", optopt);
                 else if (isprint(optopt))
-                    fprintf (stderr, "Unknown option `-%c'.\n", optopt);
+                    fprintf (stderr, "Unknown option `-%c', use -h for help.\n", optopt);
                 else
                     fprintf (stderr, "Unknown option character `\\x%x'.\n", optopt);
                 exit(EXIT_FAILURE);
@@ -176,15 +194,17 @@ void initHash() {
 
 int main(int argc, char** argv) {
     int opt;
-    float freq = (float)C4_FREQ;
+    float freq = (float)C4;
     char note[4];
+    char filename[15] = DEFAULT_FILE_NAME;
     int _duration = DEFAULT_DURATION;
     int _sample = DEFAULT_SAMPLE_RATE;
     short int _amplitude = DEFAULT_AMPLITUDE;
 
+    // Initialize Hash Table with Notes
     initHash();
 
-    parseArgs(argc, argv, &freq, note, &_duration, &_sample, &_amplitude);
+    parseArgs(argc, argv, &freq, note, &_duration, &_sample, &_amplitude, filename);
 
     const int headerSize = sizeof(struct WavHeader);
     const int sampleRate = _sample;
@@ -201,8 +221,8 @@ int main(int argc, char** argv) {
     generateWave(buff, freq, _amplitude, sampleRate, buffsize);
 
     // Create .wav file
-    printf("Generating .wav file [Freq: %.2fHz, Duration: %ds, Sample Rate: %d, Volume: %d]\n", freq, duration, sampleRate, _amplitude);
-    generateFile("result.wav", &buff, buffsize, &wavHeader, headerSize);
+    printf("Generating %s...\n[Freq: %.2fHz, Duration: %ds, Sample Rate: %d, Volume: %d]\n", filename, freq, duration, sampleRate, _amplitude);
+    generateFile(filename, &buff, buffsize, &wavHeader, headerSize);
     
     cleanup();
 
