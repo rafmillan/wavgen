@@ -4,6 +4,8 @@
 #include <math.h>
 #include <unistd.h>
 #include <ctype.h>
+#include "hash.h"
+#include "notes.h"
 
 #define WAV_HEADER_LEN 44
 
@@ -15,6 +17,10 @@
 
 #define SAMPLE_RATE_CD 44100
 #define SAMPLE_RATE_DAT 48000
+#define SAMPLE_RATE_MAX 768000
+#define SAMPLE_RATE_MIN 3000
+
+#define AMPLITUDE_MAX 32767
 
 // Source: https://docs.fileformat.com/audio/wav/
 struct WavHeader {
@@ -88,36 +94,59 @@ int isNumber(char *str) {
     return 1;
 }
 
-void parseArgs(int argc, char **argv, float *f, int *d, int *r) {
+void parseArgs(int argc, char **argv, float *f, char *n, int *d, int *r, short int *v) {
     int opt;
-    while ((opt = getopt(argc, argv, "f:t:r:")) != -1) {
+    int flag_f = 0;
+    int flag_n = 0;
+    while ((opt = getopt(argc, argv, "f:n:t:r:v:")) != -1) {
         switch (opt) {
             case 'f':
                 if(!isNumber(optarg)) {
                     fprintf (stderr, "Option -%c requires an a number (frequency in Hz).\n", opt);
-                    exit(1);
+                    exit(EXIT_FAILURE);
                 }
                 *f = atof(optarg);
+                flag_f = 1;
+                break;
+            case 'n':
+                float ff = get(optarg);
+                if (strlen(optarg) >= NOTE_KEY_SIZE || ff < 0) {
+                    fprintf(stderr, "Error: Invalid note\n");
+                    exit(EXIT_FAILURE);
+                }
+                strcpy(n, optarg);
+                *f = ff;
+                flag_n = 1;
                 break;
             case 't':
                 if(!isNumber(optarg)) {
                     fprintf (stderr, "Option -%c requires an a number (duration time in seconds).\n", opt);
-                    exit(1);
+                    exit(EXIT_FAILURE);
                 }
                 *d = atoi(optarg);
                 break;
             case 'r':
                 if(!isNumber(optarg)) {
                     fprintf (stderr, "Option -%c requires an a number (sample rate).\n", opt);
-                    exit(1);
-                } else if (atoi(optarg) < 3000) {
-                    fprintf (stderr, "Option -%c requires a sample rate >= 3000.\n", opt);
-                    exit(1);
-                } else if (atoi(optarg) > 768000) {
-                    fprintf (stderr, "Option -%c requires a sample rate <= 768000.\n", opt);
-                    exit(1);
+                    exit(EXIT_FAILURE);
+                } else if (atoi(optarg) < SAMPLE_RATE_MIN) {
+                    fprintf (stderr, "Option -%c requires a sample rate >= %d.\n", opt, SAMPLE_RATE_MIN);
+                    exit(EXIT_FAILURE);
+                } else if (atoi(optarg) > SAMPLE_RATE_MAX) {
+                    fprintf (stderr, "Option -%c requires a sample rate <= %d.\n", opt, SAMPLE_RATE_MAX);
+                    exit(EXIT_FAILURE);
                 }
                 *r = atoi(optarg);
+                break;
+            case 'v':
+                if(!isNumber(optarg)) {
+                    fprintf (stderr, "Option -%c requires an a number (volume).\n", opt);
+                    exit(EXIT_FAILURE);
+                } else if (atoi(optarg) > AMPLITUDE_MAX) {
+                    fprintf (stderr, "Option -%c requires a amplitude rate <= %d.\n", opt, AMPLITUDE_MAX);
+                    exit(EXIT_FAILURE);
+                }
+                *v = atoi(optarg);
                 break;
             case '?':
                 if (optopt == 'f')
@@ -126,21 +155,36 @@ void parseArgs(int argc, char **argv, float *f, int *d, int *r) {
                     fprintf (stderr, "Unknown option `-%c'.\n", optopt);
                 else
                     fprintf (stderr, "Unknown option character `\\x%x'.\n", optopt);
-                exit(1);
+                exit(EXIT_FAILURE);
             default:
                 fprintf(stderr, "Usage: %s\n", argv[0]);
-                exit(1);
+                exit(EXIT_FAILURE);
         }
     }
+
+    if (flag_f && flag_n) {
+        fprintf(stderr, "Error: both -f and -n were defined. Only one is allowed per command.\n");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void initHash() {
+    inithashtab();
+    for (int i = 0; i < NUM_NOTES; i++)
+        install(keys[i], vals[i]);
 }
 
 int main(int argc, char** argv) {
     int opt;
     float freq = (float)C4_FREQ;
+    char note[4];
     int _duration = DEFAULT_DURATION;
     int _sample = DEFAULT_SAMPLE_RATE;
+    short int _amplitude = DEFAULT_AMPLITUDE;
 
-    parseArgs(argc, argv, &freq, &_duration,&_sample);
+    initHash();
+
+    parseArgs(argc, argv, &freq, note, &_duration, &_sample, &_amplitude);
 
     const int headerSize = sizeof(struct WavHeader);
     const int sampleRate = _sample;
@@ -154,12 +198,13 @@ int main(int argc, char** argv) {
     generateHeader(&wavHeader, 1, sampleRate, buffsize);
 
     // Generate tone signal
-    short int amplitude = DEFAULT_AMPLITUDE;
-    generateWave(buff, freq, amplitude, sampleRate, buffsize);
+    generateWave(buff, freq, _amplitude, sampleRate, buffsize);
 
     // Create .wav file
-    printf("Generating .wav file [Freq: %.2fHz, Duration: %ds, Sample Rate: %d]\n", freq, duration, sampleRate);
+    printf("Generating .wav file [Freq: %.2fHz, Duration: %ds, Sample Rate: %d, Volume: %d]\n", freq, duration, sampleRate, _amplitude);
     generateFile("result.wav", &buff, buffsize, &wavHeader, headerSize);
+    
+    cleanup();
 
     return 0;
 }

@@ -1,4 +1,4 @@
-SOURCES=wav.c
+SOURCES=wav.c hash.c
 EXECUTALBE=wavgen
 
 all:
