@@ -95,6 +95,16 @@ int generateWaveFromInput(short int *buff, int buffsize, char **beats, int numBe
     }
 }
 
+float getPlaythroughPercent(int spb, int curr) {
+    float pct = (float)curr / (float)spb;
+    return pct;
+}
+
+float getCurve(float x) {
+    float v = 2.0f * sqrt((float)(powf(0.5f, 2) - powf((x - 0.5f), 2)));
+    return v;
+}
+
 int writeNote(short int *buff, int *buffIdx, int buffsize, int spb, float freq, int sampleRate, int amp) {
     if (*buffIdx > (buffsize - 1)) {
         fprintf(stderr, "Error: buffindex > buffsize!");
@@ -102,8 +112,11 @@ int writeNote(short int *buff, int *buffIdx, int buffsize, int spb, float freq, 
     }
         
     float period = (2 * M_PI * freq) / sampleRate;
+    int vol = amp;
     for (int i = 0; i < spb; i++) {
-        buff[*buffIdx] = (short int)(amp * cos(period * (*buffIdx)));
+        float pct = getPlaythroughPercent(spb, i); 
+        vol = amp * getCurve(pct); 
+        buff[*buffIdx] = (short int)(vol * cos(period * (*buffIdx)));
         (*buffIdx)++;
     }
 
@@ -117,18 +130,16 @@ int writeChord(short int *buff, int *buffIdx, int buffsize, int spb, float *freq
     }
     
     int startIdx = *buffIdx;
-
+    int vol = amp;
     for (int i = 0; i < freqCount; i++) {
-        //printf(" - curr note %.2f\n", freqs[i]);
         *buffIdx = startIdx;
         float period = (2 * M_PI * freqs[i]) / sampleRate;
         for (int j = 0; j < spb; j++) {
-            //printf("%d ", (*buffIdx));
-            buff[*buffIdx] += (short int)(amp * cos(period * (j)));
-            //printf("%d\n", buff[*buffIdx]);
+            float pct = getPlaythroughPercent(spb, j); 
+            vol = amp * getCurve(pct);
+            buff[*buffIdx] += (short int)(vol * cos(period * (j)));
             (*buffIdx)++;
         }
-        //printf("\n");
     }
 }
 
@@ -410,7 +421,7 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < _beats; i++) {
                     printf("writing ");
                     for (int j = 0; j < _noteCount; j++) {
-                        printf("%s (%.2f)...", chord[j], chordFreqs[j]);
+                        printf("%s (%.2f)", chord[j], chordFreqs[j]);
                     }
                     printf("\n");
                     writeChord(buff, &buffIndex, buffsize, buffIdxPerBeat, chordFreqs, _noteCount, sampleRate, _amplitude);
@@ -456,7 +467,6 @@ int main(int argc, char** argv) {
         generateHeader(&wavHeader, 1, sampleRate, buffsize);
         generateFile(filename, &buff, buffsize, &wavHeader, headerSize);
         printf("\nDone!\n");
-
 
     } else {
         const int headerSize = sizeof(struct WavHeader);
