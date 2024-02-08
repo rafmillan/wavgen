@@ -26,6 +26,11 @@
 #define AMPLITUDE_MAX 32767
 
 #define MAX_BEAT_COUNT 8
+#define MAX_CHORD_SIZE 8
+
+#define KEY_BEGIN "begin"
+#define KEY_END "end"
+#define KEY_CHORD "chord"
 
 
 // Source: https://docs.fileformat.com/audio/wav/
@@ -64,22 +69,66 @@ int generateHeader(struct WavHeader *header, int numCh, int sampleRate, int buff
     header->fileSize = header->dataSize + WAV_HEADER_LEN;
 
     return 0;
+
 }
 
-int generateWaveFromInput(short int *buff, int buffsize, char **beats, int numBeats, int sampleRate) {
+int generateWaveFromInput(short int *buff, int buffsize, char **beats, int numBeats, int sampleRate, int amp) {
     int buffIdxPerBeat = buffsize / numBeats;
     printf("buffer slices per beat: %d (%d/%d)\n", buffIdxPerBeat, buffsize, numBeats);
     
-    int amp = DEFAULT_AMPLITUDE;
     int buffIdx = 0;
     for (int noteIdx = 0; noteIdx < numBeats; noteIdx++) {
-        float freq = get(beats[noteIdx]);
-        float period = (2 * M_PI * freq) / sampleRate;
-        printf("writing %s (%f)...\n", beats[noteIdx], freq);
+        float freq, period;
+        if (beats[noteIdx] == NULL) {
+            printf("writing rest (0.0Hz)...\n");
+            freq = 0.0;
+        } else {
+            freq = get(beats[noteIdx]);
+            printf("writing %s (%fHz)...\n", beats[noteIdx], freq);
+        }
+
+        period = (2 * M_PI * freq) / sampleRate;
         for (int i = 0; i < buffIdxPerBeat; i++) {
             buff[buffIdx] = (short int)(amp * cos(period * buffIdx));
             buffIdx++;
         }
+    }
+}
+
+int writeNote(short int *buff, int *buffIdx, int buffsize, int spb, float freq, int sampleRate, int amp) {
+    if (*buffIdx > (buffsize - 1)) {
+        fprintf(stderr, "Error: buffindex > buffsize!");
+        return -1;
+    }
+        
+    float period = (2 * M_PI * freq) / sampleRate;
+    for (int i = 0; i < spb; i++) {
+        buff[*buffIdx] = (short int)(amp * cos(period * (*buffIdx)));
+        (*buffIdx)++;
+    }
+
+    return 0;
+}
+
+int writeChord(short int *buff, int *buffIdx, int buffsize, int spb, float *freqs, int freqCount, int sampleRate, int amp) {
+    if (*buffIdx > (buffsize - 1)) {
+        fprintf(stderr, "Error: buffindex > buffsize!");
+        return -1;
+    }
+    
+    int startIdx = *buffIdx;
+
+    for (int i = 0; i < freqCount; i++) {
+        //printf(" - curr note %.2f\n", freqs[i]);
+        *buffIdx = startIdx;
+        float period = (2 * M_PI * freqs[i]) / sampleRate;
+        for (int j = 0; j < spb; j++) {
+            //printf("%d ", (*buffIdx));
+            buff[*buffIdx] += (short int)(amp * cos(period * (j)));
+            //printf("%d\n", buff[*buffIdx]);
+            (*buffIdx)++;
+        }
+        //printf("\n");
     }
 }
 
@@ -260,10 +309,10 @@ int main(int argc, char** argv) {
 
         int lineNum = 1;
         int numMeasures, beatsPerMeasure, msPerBeat;
-        char beginKey[] = "begin";
+        char beginKey[] = KEY_BEGIN;
         char beginFlag[6];
-        //char endKey[] = "end";
-        //char endFlag[4];
+        char chordKey[] = KEY_CHORD;
+        char chordFlag[6];
 
         // Read numMeasures
         if (fscanf(inputfp, "%d", &numMeasures) != 1) {
@@ -301,69 +350,113 @@ int main(int argc, char** argv) {
         const int duration = (msPerBeat * beatsPerMeasure * numMeasures) / 1000;
         const int buffsize = duration * sampleRate;
         int totalBeats = numMeasures * beatsPerMeasure;
+        int buffIdxPerBeat = buffsize / totalBeats;
         short int buff[buffsize];
-        memset(buff, 0, sizeof(buffsize));
+        memset(buff, 0, sizeof(buff));
 
         printf("measures to play: %d\n", numMeasures);
         printf("beats per measure: %d\n", beatsPerMeasure);
         printf("ms per beat: %d\n", msPerBeat);
         printf("total beats: %d\n", totalBeats);
-        printf("total duration: %ds\n\n", duration);
+        printf("total duration: %ds\n", duration);
+        printf("buffsize: %d\n\n", buffsize);
 
-        char **beats = (char **) malloc(totalBeats * sizeof(char *));
-        int beatIndex = 0;
-        int beatCount;
-
+        int beatCount = 0;
         char _note[4];
-        char _beatCountStr[MAX_BEAT_COUNT];
-        
-        // Read Notes
-        while (fscanf(inputfp, "%s %s", _note, _beatCountStr) == 2) {
-            if (get(_note) < 0) {
-                fprintf(stderr, "Error (%d): Invalid Note (%s)!\n", lineNum, _note);
-                exit(EXIT_FAILURE);
-            }
-            beatCount = atoi(_beatCountStr);
-            printf("Play %s for %d beat(s)\n", _note, beatCount);
-            for (int i = 0; i < beatCount; i++) {
-                beats[beatIndex] = (char *) malloc(strlen(_note) + 1);
-                strcpy(beats[beatIndex], _note);
-                beatIndex++;
+                
+        //Read Notes/Chords
+        char line[512];
+        char *token;
+        char *delim = " \n";
+        int buffIndex = 0;
+
+        while (fgets(line, sizeof(line), inputfp)) {
+            if (!strcmp(line, "\n")) continue;
+
+            // Strip \n
+            line[strcspn(line, "\n")] = '\0';
+
+            // Check if chord
+            if (strncmp(line, KEY_CHORD, 5) == 0) {
+                int _beats = 0;
+                int _noteCount = 0;
+                char chord[MAX_CHORD_SIZE][4];
+                float chordFreqs[MAX_CHORD_SIZE] = {0.0};
+
+                for (int i = 0; i < MAX_CHORD_SIZE; i++) {
+                    strcpy(chord[i], "ABC");
+                }
+
+                // Scan for notes in chord
+                token = strtok(line, delim);
+                token = strtok(NULL, delim);
+                while (token != NULL) {
+                    if (isNumber(token)) {
+                        _beats = atoi(token);
+                        beatCount += _beats;
+                    } else {
+                        if (get(token) < 0) {
+                            fflush(stdout);
+                            printf("\n");
+                            fprintf(stderr, "Error (%d): Invalid Note (%s)!\n", lineNum, token);
+                            exit(EXIT_FAILURE);
+                        } 
+                        strcpy(chord[_noteCount], token);
+                        chordFreqs[_noteCount] = get(token);
+                        _noteCount++;
+                    }
+                    token = strtok(NULL, delim);
+                }
+                for (int i = 0; i < _beats; i++) {
+                    printf("writing ");
+                    for (int j = 0; j < _noteCount; j++) {
+                        printf("%s (%.2f)...", chord[j], chordFreqs[j]);
+                    }
+                    printf("\n");
+                    writeChord(buff, &buffIndex, buffsize, buffIdxPerBeat, chordFreqs, _noteCount, sampleRate, _amplitude);
+                }
+            } else {
+                // Assume single note
+                int _beats = 0;
+                float freq = 0.0;
+                token = strtok(line, delim); 
+                while (token != NULL) {
+                    if (isNumber(token)) {
+                        _beats = atoi(token);
+                        beatCount += _beats;
+                    } else {
+                        if (get(token) < 0) {
+                            fflush(stdout);
+                            printf("\n");
+                            fprintf(stderr, "Error (%d): Invalid Note (%s)!\n", lineNum, token);
+                            exit(EXIT_FAILURE);
+                        } else {
+                            strcpy(_note, token);
+                            freq = get(_note);
+                        }
+                    }
+                    token = strtok(NULL, delim);
+                }
+                for (int i = 0; i < _beats; i++) {
+                    printf("writing %s (%.2f)...\n", _note, freq);
+                    writeNote(buff, &buffIndex, buffsize, buffIdxPerBeat, freq, sampleRate, _amplitude);
+                }
             }
             lineNum++;
         }
+        fclose(inputfp);
 
-        // Read end token
-        //if (fscanf(inputfp, "%s", endFlag) != 1) {
-        //    fprintf(stderr, "Error reading end token [%s]!\n", );
-        //    exit(EXIT_FAILURE);
-        //} else if(strcmp(endFlag, endKey)) {
-        //    printf("Error (%d): Expected %s, actual %s\n", lineNum, endKey, endFlag);
-        //    exit(EXIT_FAILURE);
-        //}
-        //lineNum++;
-
-        fclose(inputfp);  
-
-        printf("\nRead Input (%d): ", totalBeats);
-        for (int i = 0; i < totalBeats; i++) {
-            printf("%s ", beats[i]);
+        if (beatCount > (numMeasures * beatsPerMeasure)) {
+            fprintf(stderr, "Error: total input of %d beats is greater than total number of beats available (%d)!\n", beatCount, (numMeasures * beatsPerMeasure));
+            exit(EXIT_FAILURE);
         }
-        printf("\n\n");
-
-        // Create .wav
+        
+        //Create .wav
         struct WavHeader wavHeader;
         generateHeader(&wavHeader, 1, sampleRate, buffsize);
-        generateWaveFromInput(buff, buffsize, beats, totalBeats, sampleRate);
         generateFile(filename, &buff, buffsize, &wavHeader, headerSize);
         printf("\nDone!\n");
 
-
-        // Cleanup Beats
-        for (int i = 0; i < totalBeats; i++) {
-            free(beats[i]);
-        }
-        free(beats);
 
     } else {
         const int headerSize = sizeof(struct WavHeader);

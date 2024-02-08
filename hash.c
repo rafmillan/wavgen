@@ -1,13 +1,5 @@
 #include "hash.h"
 
-// #define HASHSIZE 150
-
-// typedef struct _node {
-//     char *key;
-//     float val;
-//     struct _node *next;
-// } node;
-
 static node *hashtab[HASHSIZE];
 
 void inithashtab() {
