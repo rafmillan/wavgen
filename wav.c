@@ -105,6 +105,16 @@ float getCurve(float x) {
     return v;
 }
 
+float expDecay(float a, int x) {
+    return pow(a, x);
+}
+
+float harmonic(int n) {
+    if (n <= 1) return 1;
+    float res = ((float)(harmonic(n - 1)) + (1 / (float)n));
+    return res;
+}
+
 int writeNote(short int *buff, int *buffIdx, int buffsize, int spb, float freq, int sampleRate, int amp) {
     if (*buffIdx > (buffsize - 1)) {
         fprintf(stderr, "Error: buffindex > buffsize!");
@@ -117,6 +127,11 @@ int writeNote(short int *buff, int *buffIdx, int buffsize, int spb, float freq, 
         float pct = getPlaythroughPercent(spb, i); 
         vol = amp * getCurve(pct); 
         buff[*buffIdx] = (short int)(vol * cos(period * (*buffIdx)));
+        //for (int j = 1; j <= 6; j++) {
+        //    float period = (2 * M_PI * (freq * j)) / sampleRate;
+        //    buff[*buffIdx] += (short int)((vol * expDecay((float)0.8, j)) * cos(period * i));
+        //}
+
         (*buffIdx)++;
     }
 
@@ -144,9 +159,11 @@ int writeChord(short int *buff, int *buffIdx, int buffsize, int spb, float *freq
 }
 
 int generateWave(short int *buff, float freq, int amp, int sampleRate, int buffsize) {
-    float period = (2 * M_PI * freq) / sampleRate;
     for (int i = 0; i < buffsize; i++) {
-        buff[i] = (short int)(amp * cos(period * i));
+        for (int j = 1; j <= 6; j++) {
+            float period = (2 * M_PI * (freq * j)) / sampleRate;
+            buff[i] += (short int)((amp * expDecay((float)0.7, j)) * cos(period * i));
+        }
     }
 }
 
@@ -382,7 +399,10 @@ int main(int argc, char** argv) {
         int buffIndex = 0;
 
         while (fgets(line, sizeof(line), inputfp)) {
-            if (!strcmp(line, "\n")) continue;
+            if (!strcmp(line, "\n")) {
+                lineNum++;
+                continue;
+            }
 
             // Strip \n
             line[strcspn(line, "\n")] = '\0';
@@ -474,7 +494,7 @@ int main(int argc, char** argv) {
         const int duration = _duration;
         const int buffsize = duration * sampleRate;
         short int buff[buffsize];
-        memset(buff, 0, sizeof(buffsize));
+        memset(buff, 0, sizeof(buff));
 
         // Create .wav header
         struct WavHeader wavHeader;
